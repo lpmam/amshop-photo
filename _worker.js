@@ -183,12 +183,15 @@ export default {
             name: item.name,
             path: item.path,
             url: `https://${url.hostname}/${item.name}`,
+            // 前端可用此 URL 获取子目录内容
+            albumsUrl: `https://${url.hostname}/albums/${item.path}`,
           }));
 
         return jsonResponse({ albums, count: albums.length });
-      }
 
-      /* ── GET /albums/{id} ── 获取某个相册的图片 ── */
+
+      /* ── GET /albums/{id} ── 获取某个相册的图片和子目录 ── */
+      // 支持多级路径：/albums/folder 或 /albums/folder/subfolder
       const albumMatch = path.match(/^\/albums\/(.+)$/);
       if (albumMatch && method === "GET") {
         const albumId = decodeURIComponent(albumMatch[1]);
@@ -203,7 +206,10 @@ export default {
           return jsonResponse({ error: "GitHub API 错误", details: ghData }, ghResp.status);
         }
 
-        const images = (Array.isArray(ghData) ? ghData : [])
+        const items = Array.isArray(ghData) ? ghData : [];
+
+        // 图片文件
+        const images = items
           .filter((item) => item.type === "file" && isImageFile(item.name))
           .map((item) => ({
             name: item.name,
@@ -214,8 +220,27 @@ export default {
             raw_url: item.download_url,
           }));
 
-        return jsonResponse({ album: albumId, images, count: images.length });
+        // 子目录
+        const subfolders = items
+          .filter((item) => item.type === "dir")
+          .map((item) => ({
+            id: item.name,
+            name: item.name,
+            path: item.path,
+            url: `https://${url.hostname}/albums/${item.path}`,
+          }));
+
+        return jsonResponse({
+          album: albumId,
+          images,
+          subfolders,          // 子目录列表
+          hasSubfolders: subfolders.length > 0,  // 是否有子目录
+          imageCount: images.length,
+          subfolderCount: subfolders.length,
+          count: images.length,
+        });
       }
+
 
       /* ── GET /folders ── 获取已有文件夹列表 ── */
       if (path === "/folders" && method === "GET") {
