@@ -2,6 +2,7 @@
  * myshopjiasu.pages.dev — 后端函数 _worker.js
  *
  * 通过 GitHub Contents API 管理图片仓库（相册 = 文件夹，图片 = 文件）
+ * 支持多级目录：/albums/folder/subfolder 递归获取子目录
  *
  * 环境变量（在 Pages → Settings → Environment variables 中配置）：
  *   GITHUB_TOKEN   — GitHub Personal Access Token（需 repo 权限）【必填】
@@ -10,10 +11,10 @@
  *   GITHUB_BRANCH  — 分支名，默认 "main"
  *
  * 接口：
- *   POST /upload          — 上传图片，multipart/form-data: image=<file>, folder=<string>, name=<可选>
- *   GET  /albums          — 获取所有相册（根目录文件夹）列表
- *   GET  /albums/{id}     — 获取某个相册内的图片列表
- *   GET  /folders         — 获取已有文件夹列表（仅返回名称）
+ *   POST /upload              — 上传图片，multipart/form-data: image=<file>, folder=<string>, name=<可选>
+ *   GET  /albums              — 获取所有相册（根目录文件夹）列表
+ *   GET  /albums/{path}       — 获取某个目录内的图片 + 子目录（支持多级路径 folder/sub）
+ *   GET  /folders             — 获取已有文件夹列表（仅返回名称）
  */
 
 const GITHUB_API = "https://api.github.com";
@@ -165,7 +166,7 @@ export default {
         });
       }
 
-      /* ── GET /albums ── 获取所有相册列表 ── */
+      /* ── GET /albums ── 获取所有相册列表（根目录） ── */
       if (path === "/albums" && method === "GET") {
         const ghResp = await fetch(`${base}/contents/?ref=${branch}`, {
           headers: githubHeaders(env),
@@ -176,28 +177,29 @@ export default {
           return jsonResponse({ error: "GitHub API 错误", details: ghData }, ghResp.status);
         }
 
-        const albums = (Array.isArray(ghData) ? ghData : [])
+        const items = Array.isArray(ghData) ? ghData : [];
+
+        const albums = items
           .filter((item) => item.type === "dir")
           .map((item) => ({
             id: item.name,
             name: item.name,
             path: item.path,
             url: `https://${url.hostname}/${item.name}`,
-            // 前端可用此 URL 获取子目录内容
             albumsUrl: `https://${url.hostname}/albums/${item.path}`,
           }));
 
         return jsonResponse({ albums, count: albums.length });
+      }
 
-
-      /* ── GET /albums/{id} ── 获取某个相册的图片和子目录 ── */
-      // 支持多级路径：/albums/folder 或 /albums/folder/subfolder
+      /* ── GET /albums/{path} ── 获取目录内容（图片 + 子目录） ── */
+      // 支持多级路径：/albums/folder 或 /albums/folder/sub/subsub
       const albumMatch = path.match(/^\/albums\/(.+)$/);
       if (albumMatch && method === "GET") {
-        const albumId = decodeURIComponent(albumMatch[1]);
+        const albumPath = decodeURIComponent(albumMatch[1]);
 
         const ghResp = await fetch(
-          `${base}/contents/${encodePath(albumId)}?ref=${branch}`,
+          `${base}/contents/${encodePath(albumPath)}?ref=${branch}`,
           { headers: githubHeaders(env) }
         );
         const ghData = await ghResp.json();
@@ -206,9 +208,10 @@ export default {
           return jsonResponse({ error: "GitHub API 错误", details: ghData }, ghResp.status);
         }
 
+        // GitHub 可能返回单个对象（文件）或数组（目录）
         const items = Array.isArray(ghData) ? ghData : [];
 
-        // 图片文件
+        // 提取图片文件
         const images = items
           .filter((item) => item.type === "file" && isImageFile(item.name))
           .map((item) => ({
@@ -220,7 +223,7 @@ export default {
             raw_url: item.download_url,
           }));
 
-        // 子目录
+        // 提取子目录 — 始终返回 subfolders 字段（空数组也要有）
         const subfolders = items
           .filter((item) => item.type === "dir")
           .map((item) => ({
@@ -231,16 +234,15 @@ export default {
           }));
 
         return jsonResponse({
-          album: albumId,
+          album: albumPath,
           images,
-          subfolders,          // 子目录列表
-          hasSubfolders: subfolders.length > 0,  // 是否有子目录
           imageCount: images.length,
+          subfolders,
           subfolderCount: subfolders.length,
+          hasSubfolders: subfolders.length > 0,
           count: images.length,
         });
       }
-
 
       /* ── GET /folders ── 获取已有文件夹列表 ── */
       if (path === "/folders" && method === "GET") {
